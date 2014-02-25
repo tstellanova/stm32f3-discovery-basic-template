@@ -1,5 +1,6 @@
 # compilation results #
 #######################
+*.d
 *.o
 *.a
 *.bin
@@ -22,3 +23,7 @@ program
 # Log files #
 #############
 openocd.log
+
+
+
+
