@@ -1,24 +1,36 @@
 #include "stm32f30x.h"
 #include "stm32f3_discovery.h"
 
-/* Private variables ---------------------------------------------------------*/
-  RCC_ClocksTypeDef RCC_Clocks;
-__IO uint32_t TimingDelay = 0;
-__IO uint32_t UserButtonPressed = 0;
-__IO uint32_t i =0;
-__IO uint16_t Capture;
+#pragma mark - Private variables 
 
-uint32_t CaptureCounter = 0;
+RCC_ClocksTypeDef RCC_Clocks;
+__IO uint32_t __timingDelay = 0;
+__IO uint32_t __userButtonPressed = 0;
+__IO uint32_t i = 0;
+__IO uint16_t __captureVal = 0;
+__IO uint32_t __measuredPulse = 0;
+__IO uint32_t __dataAvailable = 0;
+
+uint32_t __captureIndex = 0;
+uint32_t __captureCounter = 0;
 uint16_t IC4Value1 = 0;
 uint16_t IC4Value2 = 0;
 
-/* Private function prototypes -----------------------------------------------*/
+#pragma mark - Private function prototypes
+
 void TimingDelay_Decrement(void);
 void Delay(__IO uint32_t nTime);
 
 static void DAC_Config(void);
 static void COMP_Config(void);
 static void TIM_Config(void);
+
+static void clear_leds(void);
+static void spin_leds(int gap);
+static void flash_leds(int gap);
+static void illuminate_led_count(int count);
+static void watch_input_captures(void);
+
 
 #pragma mark - IRQ handlers
 
@@ -43,10 +55,10 @@ void EXTI0_IRQHandler(void)
         while(STM_EVAL_PBGetState(BUTTON_USER) != RESET);
         /* Delay */
         for(i=0; i<0x7FFFF; i++);
-        UserButtonPressed++;
+        __userButtonPressed++;
         
-        if (UserButtonPressed > 0x2) {
-            UserButtonPressed = 0x0;
+        if (__userButtonPressed > 0x02) {
+            __userButtonPressed = 0x00;
         }
         
         /* Clear the EXTI line pending bit */
@@ -62,21 +74,24 @@ void EXTI0_IRQHandler(void)
 void TIM2_IRQHandler(void)
 {
     if (TIM_GetITStatus(TIM2, TIM_IT_CC4) == SET) {
-        if (0 == CaptureCounter)  {
-            IC4Value1 = TIM_GetCapture4(TIM2);
-            CaptureCounter = 1;
+        
+        uint16_t icVal = TIM_GetCapture4(TIM2);
+
+        if (0 == __captureCounter)  {
+            IC4Value1 = icVal;
+            __captureCounter = 1;
         }
-        else if (1 == CaptureCounter) {
-            CaptureCounter = 0;
-            IC4Value2 = TIM_GetCapture4(TIM2);
+        else if (1 == __captureCounter) {
+            __captureCounter = 0;
+            IC4Value2 = icVal;
             
             if (IC4Value2 > IC4Value1) {
-                Capture = (IC4Value2 - IC4Value1) - 1;
+                __captureVal = (IC4Value2 - IC4Value1) - 1;
             }
             else {
-                Capture = ((0xFFFF - IC4Value1) + IC4Value2) - 1;
+                __captureVal = ((0xFFFF - IC4Value1) + IC4Value2) - 1;
             }
-//            DisplayActive = 1;
+            __dataAvailable = 1;
         }
         TIM_ClearITPendingBit(TIM2, TIM_IT_CC4);
     }
@@ -175,6 +190,7 @@ static void TIM_Config(void)
     
     /* TIM2 clock enable */
     RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
+    
     /* TIM2 Time base configuration */
     TIM_TimeBaseStructInit(&tim_timebase);
     tim_timebase.TIM_Prescaler = 0;
@@ -182,6 +198,7 @@ static void TIM_Config(void)
     tim_timebase.TIM_Period = 65535;
     tim_timebase.TIM_ClockDivision = TIM_CKD_DIV1;
     TIM_TimeBaseInit(TIM2, &tim_timebase);
+    
     TIM_ClearFlag(TIM2, TIM_FLAG_Update);
     
     /* TIM2 Channel4 Input capture Mode configuration */
@@ -192,7 +209,7 @@ static void TIM_Config(void)
     tim_ic_init.TIM_ICSelection = TIM_ICSelection_DirectTI;
     tim_ic_init.TIM_ICPrescaler = TIM_ICPSC_DIV1;
     tim_ic_init.TIM_ICFilter = 0;
-    TIM_ICInit(TIM2, &tim_ic_init);/* assign TIM IC init to TIM2 */
+    TIM_ICInit(TIM2, &tim_ic_init);/* configure  TIM2 */
     
     /* TIM2 IRQChannel enable */
     nvicInit.NVIC_IRQChannel = TIM2_IRQn;
@@ -269,6 +286,33 @@ void leds_on()
     STM_EVAL_LEDOn(LED5);
 }
 
+
+void illuminate_led_count(int count)
+{
+    clear_leds();
+    
+    switch (count) {
+        case 8:
+            STM_EVAL_LEDOn(LED4);
+        case 7:
+            STM_EVAL_LEDOn(LED6);
+        case 6:
+            STM_EVAL_LEDOn(LED8);
+        case 5:
+            STM_EVAL_LEDOn(LED10);
+        case 4:
+            STM_EVAL_LEDOn(LED9);
+        case 3:
+            STM_EVAL_LEDOn(LED7);
+        case 2:
+            STM_EVAL_LEDOn(LED5);
+        case 1:
+            STM_EVAL_LEDOn(LED3);
+            break;
+    }
+    
+    Delay(50);
+}
 void spin_leds(int gap)
 {
     /* Toggle LD3 */
@@ -314,6 +358,21 @@ void flash_leds(int gap)
     Delay(gap); /*500ms - half second*/
 }
 
+void watch_input_captures()
+{
+    if (0 != __dataAvailable) {
+        int ledCount;
+        /* Compute the pulse width in us */
+        __measuredPulse = (uint32_t)(((uint64_t) __captureVal * 1000000) / ((uint32_t)SystemCoreClock));
+        __captureIndex++;
+        ledCount = __captureIndex % 9;
+        illuminate_led_count(ledCount);
+        
+        __dataAvailable = 0;
+    }
+    
+}
+
 /**
   * @brief  Main program.
   * @param  None
@@ -345,8 +404,6 @@ int main(void)
     /* TIM2 Configuration in input capture mode */
     TIM_Config();
     
-    
-
 
     STM_EVAL_PBInit(BUTTON_USER, BUTTON_MODE_EXTI);
 
@@ -355,17 +412,24 @@ int main(void)
 
     while (1) {
         /* Reset UserButton_Pressed variable */
-        UserButtonPressed = 0x00;
+        __userButtonPressed = 0x00;
         
         /* Waiting User Button is pressed */
-        while (UserButtonPressed == 0x00) {
+        
+        while (0x00 == __userButtonPressed) {
+            watch_input_captures();
+        }
+        
+        while (0x01 == __userButtonPressed) {
             spin_leds(5);
         }
         
         /* Infinite loop */
-        while (UserButtonPressed == 0x01) {
+        while (0x02 == __userButtonPressed) {
             flash_leds(5);
         }
+        
+
     }
 }
 /**
@@ -375,21 +439,21 @@ int main(void)
   */
 void Delay(__IO uint32_t nTime)
 {
-  TimingDelay = nTime;
+  __timingDelay = nTime;
 
-  while(TimingDelay != 0);
+  while(__timingDelay != 0);
 }
 
 /**
-  * @brief  Decrements the TimingDelay variable.
+  * @brief  Decrements the __timingDelay variable.
   * @param  None
   * @retval None
   */
 void TimingDelay_Decrement(void)
 {
-  if (TimingDelay != 0x00)
+  if (__timingDelay != 0x00)
   { 
-    TimingDelay--;
+    __timingDelay--;
   }
 }
 
