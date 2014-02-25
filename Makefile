@@ -11,7 +11,7 @@ STD_PERIPH_LIB=Libraries
 LDSCRIPT_INC=Device/ldscripts
 
 # location of OpenOCD Board .cfg files (only used with 'make program')
-OPENOCD_BOARD_DIR=~/bin/openocd
+OPENOCD_BOARD_DIR=/usr/local/Cellar/open-ocd/0.7.0/share/openocd/scripts/board/
 
 # Configuration (cfg) file containing programming directives for OpenOCD
 OPENOCD_PROC_FILE=extra/stm32f3-openocd.cfg
@@ -84,7 +84,7 @@ $(PROJ_NAME).elf: $(OBJS)
 	$(SIZE) $(PROJ_NAME).elf
 
 program: all
-	openocd -f $(OPENOCD_BOARD_DIR)/stm32f3discovery.cfg -f $(OPENOCD_PROC_FILE) -c "stm_flash `pwd`/$(PROJ_NAME).bin" -c shutdown
+	openocd -d3 -f $(OPENOCD_BOARD_DIR)/stm32f3discovery.cfg -f $(OPENOCD_PROC_FILE) -c "stm_flash `pwd`/$(PROJ_NAME).bin" -c shutdown
 
 debug: program
 	$(GDB) -x extra/gdb_cmds $(PROJ_NAME).elf

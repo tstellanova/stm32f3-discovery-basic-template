@@ -1,9 +1,13 @@
-#include "stm32f30x.h"
+
+#include "stm32f30x_comp.h"
+#include "stm32f30x_rcc.h"
+#include "stm32f30x_tim.h"
+
 #include "stm32f3_discovery.h"
 
 
 //sum of TIM_IT_CC1 .. TIM_IT_CC4
-#define ALL_TIM_CHANNELS  ((uint16_t)0x1E)
+#define ALL_TIM_CHANNELS  ((uint16_t)(TIM_IT_CC1 + TIM_IT_CC2 + TIM_IT_CC3 + TIM_IT_CC4))
 
 
 #pragma mark - Private variables 
@@ -34,6 +38,8 @@ static void spin_leds(int gap);
 static void flash_leds(int gap);
 static void illuminate_led_count(int count);
 static void illuminate_four_way_leds(int index);
+static void illuminate_eight_way_leds(uint16_t bitmap);
+
 static void watch_input_captures(void);
 static void config_one_comparator(GPIO_TypeDef* gpioPort, uint32_t gpioPin, uint32_t compSelection, uint32_t compOutput);
 static void config_one_timer_channel(TIM_TypeDef* timer, uint16_t channel);
@@ -84,15 +90,14 @@ void EXTI0_IRQHandler(void)
 void handle_one_capture_channel(TIM_TypeDef* timer, uint16_t channel)
 {
     uint32_t captureVal;
-    uint16_t idx;
+    uint16_t idx = 0;
     
     if (SET != TIM_GetITStatus(timer, channel) ) {
         //the interrupt for this channel hasn't happened yet
         return;
     }
     
-    switch(channel)
-    {
+    switch(channel) {
         case TIM_IT_CC4:
             captureVal = TIM_GetCapture4(timer);
             idx = 3;
@@ -109,7 +114,6 @@ void handle_one_capture_channel(TIM_TypeDef* timer, uint16_t channel)
             break;
             
         case TIM_IT_CC1:
-        default:
             captureVal = TIM_GetCapture1(timer);
             idx = 0;
             break;
@@ -255,7 +259,7 @@ static void DAC_Config(void)
     /*
     Set DAC Channel1 DHR register: DAC_OUT1
     n = (Vref / 3.3 V) * 4095
-    eg   n = (2V V / 3.3 V) * 4095 = 2482
+    eg   n = (2V  / 3.3 V) * 4095 = 2482
     */
     DAC_SetChannel1Data(DAC_Align_12b_R, 2482);
 }
@@ -279,42 +283,22 @@ static void COMP_Config(void)
     RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOB, ENABLE);
     /* COMP Peripheral clock enable */
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_SYSCFG, ENABLE);
-
-//    /* Init GPIO Init Structure */
-//    GPIO_StructInit(&gpioInit);
-//    /* Configure PA1: PA1 is used as COMP1 non-inverting input */
-//    gpioInit.GPIO_Pin = GPIO_Pin_1;
-//    gpioInit.GPIO_Mode = GPIO_Mode_AN; /*!< GPIO Analog Mode */
-//    gpioInit.GPIO_PuPd = GPIO_PuPd_NOPULL;
-//    GPIO_Init(GPIOA, &gpioInit);
-//    
-//    /* Clear compInit struct */
-//    COMP_StructInit(&compInit);
-//    /* COMP1 Init: PA1 is used as COMP1 non-inverting input */
-//    compInit.COMP_NonInvertingInput = COMP_NonInvertingInput_IO1;
-//    /* DAC1 output is as used COMP1 inverting input */
-//    compInit.COMP_InvertingInput = COMP_InvertingInput_DAC1;
-//    /* Redirect COMP1 output to TIM2 Input capture 4 */
-//    compInit.COMP_Output = COMP_Output_TIM2IC4;
-//    compInit.COMP_OutputPol = COMP_OutputPol_NonInverted;
-//    compInit.COMP_BlankingSrce = COMP_BlankingSrce_None;
-//    compInit.COMP_Hysteresis = COMP_Hysteresis_High;
-//    compInit.COMP_Mode = COMP_Mode_UltraLowPower;
-//    COMP_Init(COMP_Selection_COMP1, &compInit);
-//    
-//    /* Enable COMP1 */
-//    COMP_Cmd(COMP_Selection_COMP1, ENABLE);
     
+    //configure pins to route captures to TIM2IC1-TIM2IC4
+    //Need to follow rules specified in "Comparator input/outputs summary", Table 52 
     
+    //Only COMP5 can output to TIM2_IC1, gets noninverting input from PB13
+    config_one_comparator(GPIOB, GPIO_Pin_13,  COMP_Selection_COMP5, COMP_Output_TIM2IC1);
+
+    //Only COMP6 can output to TIM2_IC2, gets noninverting input from PB11
+    config_one_comparator(GPIOB, GPIO_Pin_11,  COMP_Selection_COMP6, COMP_Output_TIM2IC2);
     
-    //(PA1 for COMP1, PA7 for COMP2, PB14 for COMP3, PB0 for COMP4)
-//    config_one_comparator(uint32_t gpioPort, uint32_t gpioPin, uint32_t compSelection, uint32_t compOutput)
-    config_one_comparator(GPIOA, GPIO_Pin_1, COMP_Selection_COMP1, COMP_Output_TIM2IC1);
-    config_one_comparator(GPIOA, GPIO_Pin_7, COMP_Selection_COMP2, COMP_Output_TIM2IC2);
-    config_one_comparator(GPIOB, GPIO_Pin_14, COMP_Selection_COMP3, COMP_Output_TIM2IC3);
-    config_one_comparator(GPIOB, GPIO_Pin_0, COMP_Selection_COMP4, COMP_Output_TIM2IC4);
+    //Only COMP7 can output to TIM2_IC3, gets noninverting input from PA0
+    config_one_comparator(GPIOA, GPIO_Pin_0,  COMP_Selection_COMP7, COMP_Output_TIM2IC3);
 
-
+    //Only COMP1 or COMP2 can output to TIM2_IC4, COMP1 gets noninverting input from PA1
+    config_one_comparator(GPIOA, GPIO_Pin_1,  COMP_Selection_COMP1, COMP_Output_TIM2IC4);
+    
 }
 
 
@@ -326,10 +310,10 @@ void config_one_timer_channel(TIM_TypeDef* timer, uint16_t channel)
 {
     TIM_ICInitTypeDef tim_ic_init;
 
-    /* TIM2 Channel4 Input capture Mode configuration */
+    /* timer channel Input capture Mode configuration */
     TIM_ICStructInit(&tim_ic_init);
     tim_ic_init.TIM_Channel = channel;
-    /* TIM2 counter is captured at each transition detection: rising or falling edges (both edges) */
+    /* timer counter is captured at each transition detection: rising or falling edges (both edges) */
     tim_ic_init.TIM_ICPolarity = TIM_ICPolarity_BothEdge;
     tim_ic_init.TIM_ICSelection = TIM_ICSelection_DirectTI;
     tim_ic_init.TIM_ICPrescaler = TIM_ICPSC_DIV1;
@@ -362,16 +346,6 @@ static void TIM_Config(void)
     
     TIM_ClearFlag(TIM2, TIM_FLAG_Update);
     
-//    /* TIM2 Channel4 Input capture Mode configuration */
-//    TIM_ICStructInit(&tim_ic_init);
-//    tim_ic_init.TIM_Channel = TIM_Channel_4;
-//    /* TIM2 counter is captured at each transition detection: rising or falling edges (both edges) */
-//    tim_ic_init.TIM_ICPolarity = TIM_ICPolarity_BothEdge;
-//    tim_ic_init.TIM_ICSelection = TIM_ICSelection_DirectTI;
-//    tim_ic_init.TIM_ICPrescaler = TIM_ICPSC_DIV1;
-//    tim_ic_init.TIM_ICFilter = 0;
-//    TIM_ICInit(TIM2, &tim_ic_init);
-    
     //config_one_timer_channel(uint32_t timer, uint32_t channel)
     config_one_timer_channel(TIM2, TIM_Channel_1);
     config_one_timer_channel(TIM2, TIM_Channel_2);
@@ -386,10 +360,7 @@ static void TIM_Config(void)
     NVIC_Init(&nvicInit);
     
     /* Enable capture interrupt */
-    TIM_ITConfig(TIM2, TIM_IT_CC1, ENABLE);
-    TIM_ITConfig(TIM2, TIM_IT_CC2, ENABLE);
-    TIM_ITConfig(TIM2, TIM_IT_CC3, ENABLE);
-    TIM_ITConfig(TIM2, TIM_IT_CC4, ENABLE);
+    TIM_ITConfig(TIM2, TIM_IT_CC1 | TIM_IT_CC2 | TIM_IT_CC3 | TIM_IT_CC4, ENABLE);
     
     /* Enable the TIM2 counter */
     TIM_Cmd(TIM2, ENABLE);
@@ -397,36 +368,6 @@ static void TIM_Config(void)
     /* Reset the flags */
     TIM2->SR = 0;
 }
-
-
-
-/**
- * @brief  Configure the TIM IRQ Handler.
- * @param  None
- * @retval None
- */
-//static void TIM_Config(void)
-//{
-//    GPIO_InitTypeDef gpioInit;
-//
-//    /* TIM2 clock enable */
-//    RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
-//
-//    /* GPIOA clock enable */
-//    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOA, ENABLE);
-//
-//    /* TIM2_CH1 pin (PA.00) and TIM2_CH2 pin (PA.01) configuration */
-//    gpioInit.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1;
-//    gpioInit.GPIO_Mode = GPIO_Mode_AF;
-//    gpioInit.GPIO_Speed = GPIO_Speed_50MHz;
-//    gpioInit.GPIO_OType = GPIO_OType_PP;
-//    gpioInit.GPIO_PuPd = GPIO_PuPd_NOPULL;
-//    GPIO_Init(GPIOA, &gpioInit); //assign to PA00 + PA01
-//
-//    /* Connect TIM pins to AF1 */
-//    GPIO_PinAFConfig(GPIOA, GPIO_PinSource0, GPIO_AF_1);
-//    GPIO_PinAFConfig(GPIOA, GPIO_PinSource1, GPIO_AF_1);
-//}
 
 
 /* Private functions ---------------------------------------------------------*/
@@ -447,14 +388,7 @@ void clear_leds()
 
 void leds_on()
 {
-    STM_EVAL_LEDOn(LED3);
-    STM_EVAL_LEDOn(LED6);
-    STM_EVAL_LEDOn(LED7);
-    STM_EVAL_LEDOn(LED4);
-    STM_EVAL_LEDOn(LED10);
-    STM_EVAL_LEDOn(LED8);
-    STM_EVAL_LEDOn(LED9);
-    STM_EVAL_LEDOn(LED5);
+    illuminate_led_count(8);
 }
 
 
@@ -481,15 +415,52 @@ void illuminate_led_count(int count)
             STM_EVAL_LEDOn(LED3);
             break;
     }
+}
+
+void illuminate_eight_way_leds(uint16_t bitmap)
+{
+    clear_leds();
     
-    Delay(50);
+    if (bitmap & 0x80) {
+        STM_EVAL_LEDOn(LED4);
+    }
+    if (bitmap & 0x40) {
+        STM_EVAL_LEDOn(LED6);
+    }
+    if (bitmap & 0x20) {
+        STM_EVAL_LEDOn(LED8);
+    }
+    if (bitmap & 0x10) {
+        STM_EVAL_LEDOn(LED10);
+    }
+    
+    if (bitmap & 0x08) {
+        STM_EVAL_LEDOn(LED9);
+    }
+    if (bitmap & 0x04) {
+        STM_EVAL_LEDOn(LED7);
+    }
+    if (bitmap & 0x02) {
+        STM_EVAL_LEDOn(LED5);
+    }
+    if (bitmap & 0x01) {
+        STM_EVAL_LEDOn(LED3);
+    }
+    
 }
 
 void illuminate_four_way_leds(int index)
 {
     clear_leds();
-    
+
     switch (index) {
+        case 8:
+            STM_EVAL_LEDOn(LED4);
+            STM_EVAL_LEDOn(LED8);
+            STM_EVAL_LEDOn(LED9);
+            STM_EVAL_LEDOn(LED5);
+            break;
+            
         case 3:
             STM_EVAL_LEDOn(LED6);
             break;
@@ -504,7 +475,6 @@ void illuminate_four_way_leds(int index)
             break;
     }
     
-    Delay(50);
 }
 
 
@@ -556,23 +526,34 @@ void flash_leds(int gap)
 void watch_input_captures()
 {
     //wait for data available on all channels
-    if (ALL_TIM_CHANNELS == __dataAvailable) {
-        uint16_t maxIdx;
-        uint32_t maxPulseWidth = 0;
-        for (i = 0; i < 4; i++) {
-            if (__pulseWidths[i] > maxPulseWidth) {
-                maxPulseWidth = __pulseWidths[i];
-                maxIdx = i;
-            }
-        }
+    if (0 != __dataAvailable) {
+        uint16_t bitmap = 0;
         
         /* Compute the pulse width in us */
 //        __measuredPulse = (uint32_t)(((uint64_t) minPulse * 1000000) / ((uint32_t)SystemCoreClock));
+
+        if (__dataAvailable & TIM_IT_CC1) {
+            bitmap += 0x01;
+        }
+        if (__dataAvailable & TIM_IT_CC2) {
+            bitmap += 0x04;
+        }
+        if (__dataAvailable & TIM_IT_CC3) {
+            bitmap += 0x10;
+        }
+        if (__dataAvailable & TIM_IT_CC4) {
+            bitmap += 0x40;
+        }
         
-        //show which comparator has the max delay time
-        illuminate_four_way_leds(maxIdx);
-        
+        illuminate_eight_way_leds(bitmap);
         __dataAvailable = 0;
+        Delay(100);
+    }
+    else {
+        clear_leds();
+        Delay(25);
+        illuminate_four_way_leds(8);
+        Delay(25);
     }
     
 }
@@ -633,11 +614,11 @@ int main(void)
         __userButtonPressed = 0x00;
         
         while (0x00 == __userButtonPressed) {
-            spin_leds(5);
-        }
-        
-        while (0x01 == __userButtonPressed) {
             watch_input_captures();
+        }
+
+        while (0x01 == __userButtonPressed) {
+            spin_leds(5);
         }
         
         while (0x02 == __userButtonPressed) {
