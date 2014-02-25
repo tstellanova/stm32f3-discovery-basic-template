@@ -1,5 +1,5 @@
 # put your *.c source files here, make should handle the rest!
-SRCS = main.c errno.c stm32f3_discovery.c system_stm32f30x.c
+SRCS = main.c errno.c stm32f3_discovery.c system_stm32f30x.c 
 
 # all the files will be generated with this name (main.elf, main.bin, main.hex, etc)
 PROJ_NAME=main
@@ -11,7 +11,7 @@ STD_PERIPH_LIB=Libraries
 LDSCRIPT_INC=Device/ldscripts
 
 # location of OpenOCD Board .cfg files (only used with 'make program')
-OPENOCD_BOARD_DIR=/home/matt/bin/openocd/share/openocd/scripts/board
+OPENOCD_BOARD_DIR=~/bin/openocd
 
 # Configuration (cfg) file containing programming directives for OpenOCD
 OPENOCD_PROC_FILE=extra/stm32f3-openocd.cfg
