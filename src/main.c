@@ -115,7 +115,7 @@ static void DAC_Config(void)
     /* DAC clock enable */
     RCC_APB1PeriphClockCmd(RCC_APB1Periph_DAC, ENABLE);
     
-    /* Fill DAC InitStructure */
+    /* Fill DAC init struct */
     dacInit.DAC_Trigger = DAC_Trigger_None;
     dacInit.DAC_WaveGeneration = DAC_WaveGeneration_None;
     dacInit.DAC_LFSRUnmask_TriangleAmplitude = DAC_LFSRUnmask_Bit0;
@@ -125,8 +125,14 @@ static void DAC_Config(void)
     /* Enable DAC Channel1 */
     DAC_Cmd(DAC_Channel_1, ENABLE);
     
-    /* Set DAC Channel1 DHR register: DAC_OUT1 = (3.3 * 2000) / 4095 ~ 1.61 V */
-    DAC_SetChannel1Data(DAC_Align_12b_R, 2000);
+    
+    /*
+    Set DAC Channel1 DHR register: DAC_OUT1
+    n = (Vref / 3.3 V) * 4095
+    eg   n = (2V V / 3.3 V) * 4095 = 2482
+    */
+
+    DAC_SetChannel1Data(DAC_Align_12b_R, 2482);
 }
 
 
@@ -152,7 +158,7 @@ static void COMP_Config(void)
     gpioInit.GPIO_Pin = GPIO_Pin_1;
     gpioInit.GPIO_Mode = GPIO_Mode_AN; /*!< GPIO Analog Mode */
     gpioInit.GPIO_PuPd = GPIO_PuPd_NOPULL;
-    GPIO_Init(GPIOA, &gpioInit);//assign to PA1
+    GPIO_Init(GPIOA, &gpioInit);/* configure PA1 */
     
     /* COMP Peripheral clock enable */
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_SYSCFG, ENABLE);
