@@ -338,10 +338,10 @@ static void TIM_Config(void)
     
     /* TIM2 Time base configuration */
     TIM_TimeBaseStructInit(&tim_timebase);
-    tim_timebase.TIM_Prescaler = 0;
-    tim_timebase.TIM_CounterMode = TIM_CounterMode_Up;
-    tim_timebase.TIM_Period = 65535;
-    tim_timebase.TIM_ClockDivision = TIM_CKD_DIV1;
+//    tim_timebase.TIM_Prescaler = 0;
+//    tim_timebase.TIM_CounterMode = TIM_CounterMode_Up;
+//    tim_timebase.TIM_Period = 65535;
+//    tim_timebase.TIM_ClockDivision = TIM_CKD_DIV1;
     TIM_TimeBaseInit(TIM2, &tim_timebase);
     
     TIM_ClearFlag(TIM2, TIM_FLAG_Update);
