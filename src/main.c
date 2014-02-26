@@ -128,6 +128,7 @@ void handle_one_capture_channel(TIM_TypeDef* timer, uint16_t channel)
     else {
         //we've seen rising edge already: this is the falling edge
         uint32_t pulseWidth = 0;
+        //reset for the rising edge
         __captureCounters[idx] = 0;
         __fallingEdges[idx] = captureVal;
         
@@ -158,35 +159,10 @@ void handle_one_capture_channel(TIM_TypeDef* timer, uint16_t channel)
  */
 void TIM2_IRQHandler(void)
 {
-//    if (TIM_GetITStatus(TIM2, TIM_IT_CC4) == SET) {
-//        
-//        uint16_t icVal = TIM_GetCapture4(TIM2);
-//
-//        if (0 == __captureCounter)  {
-//            IC4Value1 = icVal;
-//            __captureCounter = 1;
-//        }
-//        else if (1 == __captureCounter) {
-//            __captureCounter = 0;
-//            IC4Value2 = icVal;
-//            
-//            if (IC4Value2 > IC4Value1) {
-//                __captureVal = (IC4Value2 - IC4Value1) - 1;
-//            }
-//            else {
-//                __captureVal = ((0xFFFF - IC4Value1) + IC4Value2) - 1;
-//            }
-//            __dataAvailable = 1;
-//        }
-//        TIM_ClearITPendingBit(TIM2, TIM_IT_CC4);
-//    }
-
-
     handle_one_capture_channel(TIM2, TIM_IT_CC1);
     handle_one_capture_channel(TIM2, TIM_IT_CC2);
     handle_one_capture_channel(TIM2, TIM_IT_CC3);
     handle_one_capture_channel(TIM2, TIM_IT_CC4);
-
 }
 
 
@@ -225,7 +201,7 @@ void config_one_comparator(GPIO_TypeDef* gpioPort, uint32_t gpioPin, uint32_t co
     compInit.COMP_OutputPol = COMP_OutputPol_NonInverted;
     compInit.COMP_BlankingSrce = COMP_BlankingSrce_None;
     compInit.COMP_Hysteresis = COMP_Hysteresis_High;
-    compInit.COMP_Mode = COMP_Mode_UltraLowPower;
+    compInit.COMP_Mode = COMP_Mode_MediumSpeed; //COMP_Mode_UltraLowPower;
     COMP_Init(compSelection, &compInit);
     
     /* Enable selected comparator */
@@ -259,9 +235,10 @@ static void DAC_Config(void)
     /*
     Set DAC Channel1 DHR register: DAC_OUT1
     n = (Vref / 3.3 V) * 4095
-    eg   n = (2V  / 3.3 V) * 4095 = 2482
+    eg   n = (2 V  / 3.3 V) * 4095 = 2482
+     n = (1.65 V / 3.3 V) * 4095 = 2048
     */
-    DAC_SetChannel1Data(DAC_Align_12b_R, 2482);
+    DAC_SetChannel1Data(DAC_Align_12b_R, 2000);
 }
 
 
@@ -288,16 +265,16 @@ static void COMP_Config(void)
     //Need to follow rules specified in "Comparator input/outputs summary", Table 52 
     
     //Only COMP5 can output to TIM2_IC1, gets noninverting input from PB13
-    config_one_comparator(GPIOB, GPIO_Pin_13,  COMP_Selection_COMP5, COMP_Output_TIM2IC1);
+    config_one_comparator(GPIOB, GPIO_Pin_13, COMP_Selection_COMP5, COMP_Output_TIM2IC1);// PB13 --> TIM2_IC1
 
     //Only COMP6 can output to TIM2_IC2, gets noninverting input from PB11
-    config_one_comparator(GPIOB, GPIO_Pin_11,  COMP_Selection_COMP6, COMP_Output_TIM2IC2);
+    config_one_comparator(GPIOB, GPIO_Pin_11, COMP_Selection_COMP6, COMP_Output_TIM2IC2);// PB11 --> TIM2_IC2
     
     //Only COMP7 can output to TIM2_IC3, gets noninverting input from PA0
-    config_one_comparator(GPIOA, GPIO_Pin_0,  COMP_Selection_COMP7, COMP_Output_TIM2IC3);
+    config_one_comparator(GPIOA, GPIO_Pin_0,  COMP_Selection_COMP7, COMP_Output_TIM2IC3);// PA0 --> TIM2_IC3
 
     //Only COMP1 or COMP2 can output to TIM2_IC4, COMP1 gets noninverting input from PA1
-    config_one_comparator(GPIOA, GPIO_Pin_1,  COMP_Selection_COMP1, COMP_Output_TIM2IC4);
+    config_one_comparator(GPIOA, GPIO_Pin_1,  COMP_Selection_COMP1, COMP_Output_TIM2IC4);// PA1 --> TIM2_IC4 (TIM_IT_CC4)
     
 }
 
@@ -338,10 +315,10 @@ static void TIM_Config(void)
     
     /* TIM2 Time base configuration */
     TIM_TimeBaseStructInit(&tim_timebase);
-//    tim_timebase.TIM_Prescaler = 0;
-//    tim_timebase.TIM_CounterMode = TIM_CounterMode_Up;
-//    tim_timebase.TIM_Period = 65535;
-//    tim_timebase.TIM_ClockDivision = TIM_CKD_DIV1;
+    tim_timebase.TIM_Prescaler = 0;
+    tim_timebase.TIM_CounterMode = TIM_CounterMode_Up;
+    tim_timebase.TIM_Period = 65535;
+    tim_timebase.TIM_ClockDivision = TIM_CKD_DIV1;
     TIM_TimeBaseInit(TIM2, &tim_timebase);
     
     TIM_ClearFlag(TIM2, TIM_FLAG_Update);
@@ -536,18 +513,21 @@ void watch_input_captures()
             bitmap += 0x01;
         }
         if (__dataAvailable & TIM_IT_CC2) {
-            bitmap += 0x04;
+            bitmap += 0x02;
         }
         if (__dataAvailable & TIM_IT_CC3) {
-            bitmap += 0x10;
+            bitmap += 0x04;
         }
         if (__dataAvailable & TIM_IT_CC4) {
-            bitmap += 0x40;
+            bitmap += 0x08;
         }
         
         illuminate_eight_way_leds(bitmap);
-        __dataAvailable = 0;
-        Delay(100);
+        
+        if (ALL_TIM_CHANNELS == __dataAvailable) {
+            __dataAvailable = 0;
+            Delay(100);
+        }
     }
     else {
         clear_leds();
