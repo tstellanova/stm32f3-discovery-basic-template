@@ -91,7 +91,7 @@ void EXTI0_IRQHandler(void)
  */
 void handle_one_capture_channel(TIM_TypeDef* timer, uint16_t channel)
 {
-    uint32_t captureVal;
+    uint32_t captureVal = 0;
     uint16_t idx = 0;
     
     if (SET != TIM_GetITStatus(timer, channel) ) {
@@ -273,10 +273,6 @@ static void DAC_Config(void)
  */
 static void COMP_Config(void)
 {
-    /* Init Structure definition */
-    COMP_InitTypeDef compInit;
-    GPIO_InitTypeDef gpioInit;
-    
     /* GPIOA Peripheral clock enable */
     RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOA, ENABLE);
     /* GPIOB Peripheral clock enable */
@@ -335,7 +331,6 @@ void config_one_timer_channel(TIM_TypeDef* timer, uint16_t channel)
 static void TIM_Config(void)
 {
     /* Init Structure definition */
-    TIM_ICInitTypeDef tim_ic_init;
     TIM_TimeBaseInitTypeDef tim_timebase;
     NVIC_InitTypeDef nvicInit;
     
@@ -552,14 +547,10 @@ void watch_input_captures()
         }
         
         illuminate_eight_way_leds(bitmap);
-        Delay(200);
-
-        resetCompCaptures();
-        
-//        if (ALL_TIM_CHANNELS == __dataAvailable) {
-//            __dataAvailable = 0;
-//            Delay(100);
-//        }
+        if (ALL_TIM_CHANNELS == __dataAvailable) {
+            resetCompCaptures();
+            Delay(25);
+        }
     }
     else {
         clear_leds();
