@@ -9,6 +9,7 @@
 //sum of TIM_IT_CC1 .. TIM_IT_CC4
 #define ALL_TIM_CHANNELS  ((uint16_t)(TIM_IT_CC1 + TIM_IT_CC2 + TIM_IT_CC3 + TIM_IT_CC4))
 
+#define NUM_CAPTURES    4
 
 #pragma mark - Private variables 
 
@@ -18,10 +19,10 @@ __IO uint32_t __userButtonPressed = 0;
 __IO uint32_t i = 0;
 __IO uint32_t __dataAvailable = 0;
 
-__IO uint32_t __captureCounters[4];
-__IO uint32_t __risingEdges[4];
-__IO uint32_t __fallingEdges[4];
-__IO uint32_t __pulseWidths[4];
+__IO uint32_t __captureCounters[NUM_CAPTURES];
+__IO uint32_t __risingEdges[NUM_CAPTURES];
+__IO uint32_t __fallingEdges[NUM_CAPTURES];
+__IO uint32_t __pulseWidths[NUM_CAPTURES];
 
 
 #pragma mark - Private function prototypes
@@ -33,6 +34,7 @@ static void DAC_Config(void);
 static void COMP_Config(void);
 static void TIM_Config(void);
 
+static void resetCompCaptures(void);
 static void clear_leds(void);
 static void spin_leds(int gap);
 static void flash_leds(int gap);
@@ -132,14 +134,23 @@ void handle_one_capture_channel(TIM_TypeDef* timer, uint16_t channel)
         __captureCounters[idx] = 0;
         __fallingEdges[idx] = captureVal;
         
+        
+        //TODO we currently only allow rising and falling edges in the same time sequence
+        //wrapping is disallowed
+        
         if (__fallingEdges[idx] > __risingEdges[idx])  {
             // the rising and falling edges were detected before timer wrapped
             pulseWidth = __fallingEdges[idx] - __risingEdges[idx] - 1 ;
         }
         else {
-            //the timer wrapped before falling edge was detected
-            pulseWidth = ((0xFFFF - __risingEdges[idx]) + __fallingEdges[idx]) - 1;
+            //reset
+            __risingEdges[idx] = 0;
+            __fallingEdges[idx] = 0;
         }
+//        else {
+//            //the timer wrapped before falling edge was detected
+//            pulseWidth = ((0xFFFF - __risingEdges[idx]) + __fallingEdges[idx]) - 1;
+//        }
         
         //TODO check the pulseWidth to ensure it's something reasonable
         __pulseWidths[idx] = pulseWidth;
@@ -188,12 +199,24 @@ void config_one_comparator(GPIO_TypeDef* gpioPort, uint32_t gpioPin, uint32_t co
     gpioInit.GPIO_Pin = gpioPin;
     gpioInit.GPIO_Mode = GPIO_Mode_AN; /*!< GPIO Analog Mode */
     gpioInit.GPIO_PuPd = GPIO_PuPd_NOPULL;
-    GPIO_Init(GPIOA, &gpioInit);
+    gpioInit.GPIO_Speed = GPIO_Speed_10MHz;
+    GPIO_Init(gpioPort, &gpioInit);
     
     /* Clear compInit struct */
     COMP_StructInit(&compInit);
     /* GPIO pin is used as selected comparator non-inverting input */
-    compInit.COMP_NonInvertingInput = COMP_NonInvertingInput_IO1;
+    switch (compSelection) {
+        case COMP_Selection_COMP1:
+            compInit.COMP_NonInvertingInput = COMP_NonInvertingInput_IO1;
+            break;
+        case COMP_Selection_COMP5:
+        case COMP_Selection_COMP6:
+        case COMP_Selection_COMP7:
+            compInit.COMP_NonInvertingInput = COMP_NonInvertingInput_IO2;
+            break;
+    }
+
+    
     /* DAC1 output is as used COMP1 inverting input, providing threshold */
     compInit.COMP_InvertingInput = COMP_InvertingInput_DAC1;
     /* Redirect selected comparator output */
@@ -201,7 +224,7 @@ void config_one_comparator(GPIO_TypeDef* gpioPort, uint32_t gpioPin, uint32_t co
     compInit.COMP_OutputPol = COMP_OutputPol_NonInverted;
     compInit.COMP_BlankingSrce = COMP_BlankingSrce_None;
     compInit.COMP_Hysteresis = COMP_Hysteresis_High;
-    compInit.COMP_Mode = COMP_Mode_MediumSpeed; //COMP_Mode_UltraLowPower;
+    compInit.COMP_Mode = COMP_Mode_HighSpeed; //COMP_Mode_UltraLowPower;
     COMP_Init(compSelection, &compInit);
     
     /* Enable selected comparator */
@@ -238,7 +261,7 @@ static void DAC_Config(void)
     eg   n = (2 V  / 3.3 V) * 4095 = 2482
      n = (1.65 V / 3.3 V) * 4095 = 2048
     */
-    DAC_SetChannel1Data(DAC_Align_12b_R, 2000);
+    DAC_SetChannel1Data(DAC_Align_12b_R, 2482);
 }
 
 
@@ -258,24 +281,30 @@ static void COMP_Config(void)
     RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOA, ENABLE);
     /* GPIOB Peripheral clock enable */
     RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOB, ENABLE);
+    /* GPIOC Peripheral clock enable */
+    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_GPIOC, ENABLE);
     /* COMP Peripheral clock enable */
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_SYSCFG, ENABLE);
     
     //configure pins to route captures to TIM2IC1-TIM2IC4
     //Need to follow rules specified in "Comparator input/outputs summary", Table 52 
     
+    
     //Only COMP5 can output to TIM2_IC1, gets noninverting input from PB13
     config_one_comparator(GPIOB, GPIO_Pin_13, COMP_Selection_COMP5, COMP_Output_TIM2IC1);// PB13 --> TIM2_IC1
-
+    
     //Only COMP6 can output to TIM2_IC2, gets noninverting input from PB11
     config_one_comparator(GPIOB, GPIO_Pin_11, COMP_Selection_COMP6, COMP_Output_TIM2IC2);// PB11 --> TIM2_IC2
     
-    //Only COMP7 can output to TIM2_IC3, gets noninverting input from PA0
-    config_one_comparator(GPIOA, GPIO_Pin_0,  COMP_Selection_COMP7, COMP_Output_TIM2IC3);// PA0 --> TIM2_IC3
+    //Only COMP7 can output to TIM2_IC3, gets noninverting input from PC1
+    config_one_comparator(GPIOC, GPIO_Pin_1,  COMP_Selection_COMP7, COMP_Output_TIM2IC3);// PC1 --> TIM2_IC3
 
     //Only COMP1 or COMP2 can output to TIM2_IC4, COMP1 gets noninverting input from PA1
     config_one_comparator(GPIOA, GPIO_Pin_1,  COMP_Selection_COMP1, COMP_Output_TIM2IC4);// PA1 --> TIM2_IC4 (TIM_IT_CC4)
     
+    
+
+
 }
 
 
@@ -513,41 +542,48 @@ void watch_input_captures()
             bitmap += 0x01;
         }
         if (__dataAvailable & TIM_IT_CC2) {
-            bitmap += 0x02;
-        }
-        if (__dataAvailable & TIM_IT_CC3) {
             bitmap += 0x04;
         }
+        if (__dataAvailable & TIM_IT_CC3) {
+            bitmap += 0x10;
+        }
         if (__dataAvailable & TIM_IT_CC4) {
-            bitmap += 0x08;
+            bitmap += 0x40;
         }
         
         illuminate_eight_way_leds(bitmap);
+        Delay(200);
+
+        resetCompCaptures();
         
-        if (ALL_TIM_CHANNELS == __dataAvailable) {
-            __dataAvailable = 0;
-            Delay(100);
-        }
+//        if (ALL_TIM_CHANNELS == __dataAvailable) {
+//            __dataAvailable = 0;
+//            Delay(100);
+//        }
     }
     else {
         clear_leds();
-        Delay(25);
-        illuminate_four_way_leds(8);
-        Delay(25);
+//        illuminate_four_way_leds(8);
+//        Delay(5);
     }
     
 }
 
-
-void setup(void)
+void resetCompCaptures(void)
 {
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < NUM_CAPTURES; i++) {
         __captureCounters[i] = 0;
         __risingEdges[i] = 0;
         __fallingEdges[i] = 0;
         __pulseWidths[i] = 0;
     }
     
+    __dataAvailable = 0;
+}
+
+void setup(void)
+{
+
     
     /* SysTick end of count event each 10ms */
     RCC_GetClocksFreq(&RCC_Clocks);
@@ -598,7 +634,8 @@ int main(void)
         }
 
         while (0x01 == __userButtonPressed) {
-            spin_leds(5);
+            leds_on();
+//            spin_leds(5);
         }
         
         while (0x02 == __userButtonPressed) {
