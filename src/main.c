@@ -9,21 +9,44 @@
 //sum of TIM_IT_CC1 .. TIM_IT_CC4
 #define ALL_TIM_CHANNELS  ((uint16_t)(TIM_IT_CC1 + TIM_IT_CC2 + TIM_IT_CC3 + TIM_IT_CC4))
 
-#define NUM_CAPTURES    4
+#define NUM_CHANNELS    4
+#define PULSES_PER_PACKET    6
+#define CROSSINGS_PER_PACKET 12
+
+#define SPIN_DELAY(x) { for(i=0; i<(x); i++) {} }
+
+#define MAP_LED_NW      0x80
+#define MAP_LED_W       0x40
+#define MAP_LED_SW      0x20
+#define MAP_LED_S       0x10
+#define MAP_LED_SE      0x08
+#define MAP_LED_E       0x04
+#define MAP_LED_NE      0x02
+#define MAP_LED_N       0x01
 
 #pragma mark - Private variables 
 
 RCC_ClocksTypeDef RCC_Clocks;
+
+
+
+typedef struct CrossingTimes {
+    //the next index at which a capture time should be stored
+    uint16_t writeIndex;
+    //rising and falling edge times
+    uint32_t times[CROSSINGS_PER_PACKET];
+    uint32_t averagePacketCenter;
+} CrossingTimes_t;
+
+
 __IO uint32_t __timingDelay = 0;
 __IO uint32_t __userButtonPressed = 0;
 __IO uint32_t i = 0;
 __IO uint32_t __dataAvailable = 0;
+__IO uint32_t __renderCount = 0;
 
-__IO uint32_t __captureCounters[NUM_CAPTURES];
-__IO uint32_t __risingEdges[NUM_CAPTURES];
-__IO uint32_t __fallingEdges[NUM_CAPTURES];
-__IO uint32_t __pulseWidths[NUM_CAPTURES];
 
+__IO CrossingTimes_t __chanData[NUM_CHANNELS];
 
 #pragma mark - Private function prototypes
 
@@ -40,7 +63,7 @@ static void spin_leds(int gap);
 static void flash_leds(int gap);
 static void illuminate_led_count(int count);
 static void illuminate_four_way_leds(int index);
-static void illuminate_eight_way_leds(uint16_t bitmap);
+static void illuminate_compass_leds(uint16_t bitmap);
 
 static void watch_input_captures(void);
 static void config_one_comparator(GPIO_TypeDef* gpioPort, uint32_t gpioPin, uint32_t compSelection, uint32_t compOutput);
@@ -63,13 +86,13 @@ void EXTI0_IRQHandler(void)
 {
     if ((EXTI_GetITStatus(USER_BUTTON_EXTI_LINE) == SET)&&(STM_EVAL_PBGetState(BUTTON_USER) != RESET))
     {
-        /* Delay */
-        for(i=0; i<0x7FFFF; i++);
+        SPIN_DELAY(0x7FFFF);
         
         /* Wait for SEL button to be pressed  */
-        while(STM_EVAL_PBGetState(BUTTON_USER) != RESET);
-        /* Delay */
-        for(i=0; i<0x7FFFF; i++);
+        while(STM_EVAL_PBGetState(BUTTON_USER) != RESET) {}
+        
+        SPIN_DELAY(0x7FFFF);
+        
         __userButtonPressed++;
         
         if (__userButtonPressed > 0x02) {
@@ -92,6 +115,7 @@ void EXTI0_IRQHandler(void)
 void handle_one_capture_channel(TIM_TypeDef* timer, uint16_t channel)
 {
     uint32_t captureVal = 0;
+    uint32_t pulseWidth = 0;
     uint16_t idx = 0;
     
     if (SET != TIM_GetITStatus(timer, channel) ) {
@@ -121,43 +145,40 @@ void handle_one_capture_channel(TIM_TypeDef* timer, uint16_t channel)
             break;
     }
     
-    
-    if (0 == __captureCounters[idx]) {
-        //we haven't seen a rising edge yet
-        __captureCounters[idx] = 1; //now we have
-        __risingEdges[idx] = captureVal;
-    }
-    else {
-        //we've seen rising edge already: this is the falling edge
-        uint32_t pulseWidth = 0;
-        //reset for the rising edge
-        __captureCounters[idx] = 0;
-        __fallingEdges[idx] = captureVal;
-        
-        
-        //TODO we currently only allow rising and falling edges in the same time sequence
-        //wrapping is disallowed
-        
-        if (__fallingEdges[idx] > __risingEdges[idx])  {
-            // the rising and falling edges were detected before timer wrapped
-            pulseWidth = __fallingEdges[idx] - __risingEdges[idx] - 1 ;
-        }
-        else {
-            //reset
-            __risingEdges[idx] = 0;
-            __fallingEdges[idx] = 0;
-        }
-//        else {
-//            //the timer wrapped before falling edge was detected
-//            pulseWidth = ((0xFFFF - __risingEdges[idx]) + __fallingEdges[idx]) - 1;
+    __dataAvailable |= channel;
+
+
+//    CrossingTimes_t* pChanData = (CrossingTimes_t*)(&__chanData[idx]);
+//
+//    if (pChanData->writeIndex < CROSSINGS_PER_PACKET) {
+//        pChanData->times[pChanData->writeIndex] = captureVal;
+//        if ((pChanData->writeIndex % 2) == 1) {
+//            //check the pulse width
+//            pulseWidth = pChanData->times[pChanData->writeIndex] - pChanData->times[pChanData->writeIndex - 1];
+//            if (pulseWidth < 0) {
+//                illuminate_compass_leds(MAP_LED_W);
+//                //reset the clock...the timer has wrapped
+//                //resetCompCaptures();
+//                //TIM_ClearITPendingBit(timer, channel);
+//                //return;
+//            }
 //        }
-        
-        //TODO check the pulseWidth to ensure it's something reasonable
-        __pulseWidths[idx] = pulseWidth;
-        
-        //this channel now has a valid pulsewidth read
-        __dataAvailable += channel;
-    }
+//        pChanData->writeIndex++;
+//
+//            
+//        if (pChanData->writeIndex >= CROSSINGS_PER_PACKET){
+//            pChanData->averagePacketCenter = 0;
+//            for (int k = 0; k < CROSSINGS_PER_PACKET; k++) {
+//                pChanData->averagePacketCenter += pChanData->times[k];
+//            }
+//            pChanData->averagePacketCenter = pChanData->averagePacketCenter / CROSSINGS_PER_PACKET;
+//
+//            //this channel now has a whole packet of pulses read
+//            __dataAvailable &= channel;
+//        }
+//    }
+
+    
     
     TIM_ClearITPendingBit(timer, channel);
 
@@ -260,8 +281,9 @@ static void DAC_Config(void)
     n = (Vref / 3.3 V) * 4095
     eg   n = (2 V  / 3.3 V) * 4095 = 2482
      n = (1.65 V / 3.3 V) * 4095 = 2048
+     n = (1.0 V / 3.3 V) * 4095 = 1241
     */
-    DAC_SetChannel1Data(DAC_Align_12b_R, 2482);
+    DAC_SetChannel1Data(DAC_Align_12b_R, 1241);
 }
 
 
@@ -418,33 +440,33 @@ void illuminate_led_count(int count)
     }
 }
 
-void illuminate_eight_way_leds(uint16_t bitmap)
+void illuminate_compass_leds(uint16_t bitmap)
 {
     clear_leds();
     
-    if (bitmap & 0x80) {
+    if (bitmap & MAP_LED_NW) {
         STM_EVAL_LEDOn(LED4);
     }
-    if (bitmap & 0x40) {
+    if (bitmap & MAP_LED_W) {
         STM_EVAL_LEDOn(LED6);
     }
-    if (bitmap & 0x20) {
+    if (bitmap & MAP_LED_SW) {
         STM_EVAL_LEDOn(LED8);
     }
-    if (bitmap & 0x10) {
+    if (bitmap & MAP_LED_S) {
         STM_EVAL_LEDOn(LED10);
     }
     
-    if (bitmap & 0x08) {
+    if (bitmap & MAP_LED_SE) {
         STM_EVAL_LEDOn(LED9);
     }
-    if (bitmap & 0x04) {
+    if (bitmap & MAP_LED_E) {
         STM_EVAL_LEDOn(LED7);
     }
-    if (bitmap & 0x02) {
+    if (bitmap & MAP_LED_NE) {
         STM_EVAL_LEDOn(LED5);
     }
-    if (bitmap & 0x01) {
+    if (bitmap & MAP_LED_N) {
         STM_EVAL_LEDOn(LED3);
     }
     
@@ -526,47 +548,54 @@ void flash_leds(int gap)
 
 void watch_input_captures()
 {
+
     //wait for data available on all channels
     if (0 != __dataAvailable) {
         uint16_t bitmap = 0;
-        
+        __renderCount++;
+
         /* Compute the pulse width in us */
 //        __measuredPulse = (uint32_t)(((uint64_t) minPulse * 1000000) / ((uint32_t)SystemCoreClock));
 
         if (__dataAvailable & TIM_IT_CC1) {
-            bitmap += 0x01;
+            bitmap += MAP_LED_NE;
         }
         if (__dataAvailable & TIM_IT_CC2) {
-            bitmap += 0x04;
+            bitmap += MAP_LED_N;
         }
         if (__dataAvailable & TIM_IT_CC3) {
-            bitmap += 0x10;
+            bitmap += MAP_LED_NW;
         }
         if (__dataAvailable & TIM_IT_CC4) {
-            bitmap += 0x40;
+            bitmap += MAP_LED_SE;
         }
         
-        illuminate_eight_way_leds(bitmap);
-        if (ALL_TIM_CHANNELS == __dataAvailable) {
+        illuminate_compass_leds(bitmap);
+        if (__renderCount == 100) {
             resetCompCaptures();
-            Delay(25);
+            __renderCount = 0;
+            Delay(10);
         }
+
     }
     else {
         clear_leds();
+        __renderCount = 0;
 //        illuminate_four_way_leds(8);
 //        Delay(5);
     }
     
+    
 }
 
+/**
+ Sure would be nice to have memset here!
+ */
 void resetCompCaptures(void)
-{
-    for (i = 0; i < NUM_CAPTURES; i++) {
-        __captureCounters[i] = 0;
-        __risingEdges[i] = 0;
-        __fallingEdges[i] = 0;
-        __pulseWidths[i] = 0;
+{   int idx;
+    for (idx  = 0; idx < NUM_CHANNELS; idx++) {
+        __chanData[idx].writeIndex = 0;
+        __chanData[idx].averagePacketCenter = 0;
     }
     
     __dataAvailable = 0;
@@ -675,8 +704,10 @@ void assert_failed(uint8_t* file, uint32_t line)
      ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
 
   /* Infinite loop */
+
   while (1)
   {
+      illuminate_compass_leds(MAP_LED_W);
   }
 }
 #endif
