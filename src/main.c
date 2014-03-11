@@ -581,7 +581,7 @@ void watch_input_captures()
         
         illuminate_compass_leds(bitmap);
         
-        if (__renderCount == 10) {
+        if (__renderCount == 5) {
             uint16_t minIdx = 0;
             uint32_t minValue = 0x0FFFFFFF;
             uint32_t secondPlace = 0;
@@ -620,7 +620,7 @@ void watch_input_captures()
                         break;
                 }
                 illuminate_compass_leds(bitmap);
-                Delay(20);
+                Delay(15);
             }
             
             resetCompCaptures();
