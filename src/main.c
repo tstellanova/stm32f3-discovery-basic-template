@@ -13,7 +13,14 @@
 #define PULSES_PER_PACKET    6
 #define CROSSINGS_PER_PACKET (2*PULSES_PER_PACKET)
 
+//microseconds to disallow further input on a particular channel
+#define BLANKING_INTERVAL   2500
+
 #define SPIN_DELAY(x) { for(i=0; i<(x); i++) {} }
+
+#define TIME_TO_USEC(x)  ( (uint32_t)(((uint64_t) (x) * 1000000) / ((uint32_t)SystemCoreClock)) )
+#define TIME_BY_ADDING_USEC(x,t) ( (uint32_t) ((x) + (uint64_t)((t) * (uint32_t)SystemCoreClock ) / 1000000 ) )
+
 
 #define MAP_LED_NW      0x80
 #define MAP_LED_W       0x40
@@ -30,13 +37,14 @@ RCC_ClocksTypeDef RCC_Clocks;
 
 
 
-typedef struct CrossingTimes {
+typedef struct ChannelData {
     //the next index at which a capture time should be stored
     uint16_t writeIndex;
     //rising and falling edge times
     uint32_t times[CROSSINGS_PER_PACKET];
     uint32_t averagePacketCenter;
-} CrossingTimes_t;
+    uint32_t embargoExitTime;
+} ChannelData_t;
 
 
 __IO uint32_t __timingDelay = 0;
@@ -46,7 +54,7 @@ __IO uint32_t __dataAvailable = 0;
 __IO uint32_t __renderCount = 0;
 
 
-__IO CrossingTimes_t __chanData[NUM_CHANNELS];
+__IO ChannelData_t __chanData[NUM_CHANNELS];
 
 #pragma mark - Private function prototypes
 
@@ -147,9 +155,11 @@ void handle_one_capture_channel(TIM_TypeDef* timer, uint16_t channel)
     
 
 
-    CrossingTimes_t* pChanData = (CrossingTimes_t*)(&__chanData[idx]);
+    ChannelData_t* pChanData = (ChannelData_t*)(&__chanData[idx]);
 
-    if (pChanData->writeIndex < CROSSINGS_PER_PACKET) {
+    if ((pChanData->writeIndex < CROSSINGS_PER_PACKET) &&
+        (pChanData->embargoExitTime < captureVal))  {
+        
         pChanData->times[pChanData->writeIndex] = captureVal;
         if ((pChanData->writeIndex % 2) == 1) {
             //check the pulse width
@@ -164,13 +174,13 @@ void handle_one_capture_channel(TIM_TypeDef* timer, uint16_t channel)
         }
         pChanData->writeIndex++;
 
-            
-        if (pChanData->writeIndex >= CROSSINGS_PER_PACKET){
+        if (pChanData->writeIndex >= CROSSINGS_PER_PACKET) {
             pChanData->averagePacketCenter = 0;
             for (int k = 0; k < CROSSINGS_PER_PACKET; k++) {
                 pChanData->averagePacketCenter += pChanData->times[k];
             }
             pChanData->averagePacketCenter = pChanData->averagePacketCenter / CROSSINGS_PER_PACKET;
+            pChanData->embargoExitTime = TIME_BY_ADDING_USEC(pChanData->averagePacketCenter, BLANKING_INTERVAL);
 
             //this channel now has a whole packet of pulses read
             __dataAvailable |= channel;
@@ -571,7 +581,7 @@ void watch_input_captures()
         
         illuminate_compass_leds(bitmap);
         
-        if (__renderCount == 5) {
+        if (__renderCount == 10) {
             uint16_t minIdx = 0;
             uint32_t minValue = 0x0FFFFFFF;
             uint32_t secondPlace = 0;
@@ -590,10 +600,10 @@ void watch_input_captures()
                 }
             }
 
-
-            winnerGap = (uint32_t)(((uint64_t) (secondPlace - minValue) * 1000000) / ((uint32_t)SystemCoreClock));
+            //convert to microseconds
+            winnerGap = TIME_TO_USEC( (secondPlace - minValue) );
             
-            if (winnerGap > 100) {
+            if (winnerGap > 30) {
                 //display the "winner" of the closest receiver
                 switch (minIdx) {
                     case 0:
@@ -610,7 +620,7 @@ void watch_input_captures()
                         break;
                 }
                 illuminate_compass_leds(bitmap);
-                Delay(10);
+                Delay(20);
             }
             
             resetCompCaptures();
@@ -632,13 +642,15 @@ void watch_input_captures()
  Sure would be nice to have memset here!
  */
 void resetCompCaptures(void)
-{   int idx;
-    for (idx  = 0; idx < NUM_CHANNELS; idx++) {
+{
+    __dataAvailable = 0;
+
+    for (int idx  = 0; idx < NUM_CHANNELS; idx++) {
         __chanData[idx].writeIndex = 0;
         __chanData[idx].averagePacketCenter = 0;
+        __chanData[idx].embargoExitTime = 0;
     }
     
-    __dataAvailable = 0;
 }
 
 void setup(void)
