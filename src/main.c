@@ -11,7 +11,7 @@
 
 #define NUM_CHANNELS    4
 #define PULSES_PER_PACKET    6
-#define CROSSINGS_PER_PACKET 12
+#define CROSSINGS_PER_PACKET (2*PULSES_PER_PACKET)
 
 #define SPIN_DELAY(x) { for(i=0; i<(x); i++) {} }
 
@@ -145,38 +145,37 @@ void handle_one_capture_channel(TIM_TypeDef* timer, uint16_t channel)
             break;
     }
     
-    __dataAvailable |= channel;
 
 
-//    CrossingTimes_t* pChanData = (CrossingTimes_t*)(&__chanData[idx]);
-//
-//    if (pChanData->writeIndex < CROSSINGS_PER_PACKET) {
-//        pChanData->times[pChanData->writeIndex] = captureVal;
-//        if ((pChanData->writeIndex % 2) == 1) {
-//            //check the pulse width
-//            pulseWidth = pChanData->times[pChanData->writeIndex] - pChanData->times[pChanData->writeIndex - 1];
-//            if (pulseWidth < 0) {
-//                illuminate_compass_leds(MAP_LED_W);
-//                //reset the clock...the timer has wrapped
-//                //resetCompCaptures();
-//                //TIM_ClearITPendingBit(timer, channel);
-//                //return;
-//            }
-//        }
-//        pChanData->writeIndex++;
-//
-//            
-//        if (pChanData->writeIndex >= CROSSINGS_PER_PACKET){
-//            pChanData->averagePacketCenter = 0;
-//            for (int k = 0; k < CROSSINGS_PER_PACKET; k++) {
-//                pChanData->averagePacketCenter += pChanData->times[k];
-//            }
-//            pChanData->averagePacketCenter = pChanData->averagePacketCenter / CROSSINGS_PER_PACKET;
-//
-//            //this channel now has a whole packet of pulses read
-//            __dataAvailable &= channel;
-//        }
-//    }
+    CrossingTimes_t* pChanData = (CrossingTimes_t*)(&__chanData[idx]);
+
+    if (pChanData->writeIndex < CROSSINGS_PER_PACKET) {
+        pChanData->times[pChanData->writeIndex] = captureVal;
+        if ((pChanData->writeIndex % 2) == 1) {
+            //check the pulse width
+            pulseWidth = pChanData->times[pChanData->writeIndex] - pChanData->times[pChanData->writeIndex - 1];
+            if (pulseWidth < 0) {
+                illuminate_compass_leds(MAP_LED_W);
+                //reset the clock...the timer has wrapped
+                resetCompCaptures();
+                TIM_ClearITPendingBit(timer, channel);
+                return;
+            }
+        }
+        pChanData->writeIndex++;
+
+            
+        if (pChanData->writeIndex >= CROSSINGS_PER_PACKET){
+            pChanData->averagePacketCenter = 0;
+            for (int k = 0; k < CROSSINGS_PER_PACKET; k++) {
+                pChanData->averagePacketCenter += pChanData->times[k];
+            }
+            pChanData->averagePacketCenter = pChanData->averagePacketCenter / CROSSINGS_PER_PACKET;
+
+            //this channel now has a whole packet of pulses read
+            __dataAvailable |= channel;
+        }
+    }
 
     
     
@@ -571,10 +570,51 @@ void watch_input_captures()
         }
         
         illuminate_compass_leds(bitmap);
-        if (__renderCount == 100) {
+        
+        if (__renderCount == 5) {
+            uint16_t minIdx = 0;
+            uint32_t minValue = 0x0FFFFFFF;
+            uint32_t secondPlace = 0;
+            uint32_t winnerGap = 0;
+            for (int idx  = 0; idx < NUM_CHANNELS; idx++) {
+                uint32_t chanAvgPulse = __chanData[idx].averagePacketCenter;
+                if (chanAvgPulse > 0 && (chanAvgPulse < minValue)) {
+                    if (0 == secondPlace) {
+                        secondPlace = chanAvgPulse;
+                    }
+                    else {
+                        secondPlace = minValue;
+                    }
+                    minValue = chanAvgPulse;
+                    minIdx = idx;
+                }
+            }
+
+
+            winnerGap = (uint32_t)(((uint64_t) (secondPlace - minValue) * 1000000) / ((uint32_t)SystemCoreClock));
+            
+            if (winnerGap > 100) {
+                //display the "winner" of the closest receiver
+                switch (minIdx) {
+                    case 0:
+                        bitmap = MAP_LED_NE;
+                        break;
+                    case 1:
+                        bitmap = MAP_LED_N;
+                        break;
+                    case 2:
+                        bitmap = MAP_LED_NW;
+                        break;
+                    case 3:
+                        bitmap = MAP_LED_SE;
+                        break;
+                }
+                illuminate_compass_leds(bitmap);
+                Delay(10);
+            }
+            
             resetCompCaptures();
             __renderCount = 0;
-            Delay(10);
         }
 
     }
