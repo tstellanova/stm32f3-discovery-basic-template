@@ -21,6 +21,7 @@
 #define TIME_TO_USEC(x)  ( (uint32_t)(((uint64_t) (x) * 1000000) / ((uint32_t)SystemCoreClock)) )
 #define TIME_BY_ADDING_USEC(x,t) ( (uint32_t) ((x) + (uint64_t)((t) * (uint32_t)SystemCoreClock ) / 1000000 ) )
 
+#define METERS_FROM_TICKS(x) ((float) (4.7*(x)/100000) )
 
 #define MAP_LED_NW      0x80
 #define MAP_LED_W       0x40
@@ -372,7 +373,7 @@ static void TIM_Config(void)
     TIM_TimeBaseStructInit(&tim_timebase);
     tim_timebase.TIM_Prescaler = 0;
     tim_timebase.TIM_CounterMode = TIM_CounterMode_Up;
-    tim_timebase.TIM_Period = 65535;
+    tim_timebase.TIM_Period = 65535; //TODO check this...should probably be 32 bit instead
     tim_timebase.TIM_ClockDivision = TIM_CKD_DIV1;
     TIM_TimeBaseInit(TIM2, &tim_timebase);
     
@@ -555,6 +556,82 @@ void flash_leds(int gap)
     Delay(gap); /*500ms - half second*/
 }
 
+
+void renderDirectionForRaceResults(const uint16_t* sortedIndices)
+{
+    uint16_t bitmap = 0;
+    uint32_t firstIdx = sortedIndices[0];
+    uint16_t secondIdx = sortedIndices[1];
+    uint32_t firstTime = __chanData[firstIdx].averagePacketCenter;
+    uint32_t secondTime = __chanData[secondIdx].averagePacketCenter;
+    uint32_t winnerGap = (secondTime - firstTime); //raw ticks difference
+    
+    //convert to microseconds
+//    uint32_t winnerGap = TIME_TO_USEC( (secondTime - firstTime) );
+    
+    switch (firstIdx) {
+        case 0:
+            bitmap |= MAP_LED_NW;
+            break;
+        case 1:
+            bitmap |= MAP_LED_NE;
+            break;
+        case 2:
+            bitmap |= MAP_LED_SE;
+            break;
+        case 3:
+            bitmap |= MAP_LED_SW;
+            break;
+    }
+    
+    if (winnerGap < 1800) { //essentially one wavelength diff
+
+        switch (secondIdx) {
+            case 0:
+                bitmap |= MAP_LED_NW;
+                break;
+            case 1:
+                bitmap |= MAP_LED_NE;
+                break;
+            case 2:
+                bitmap |= MAP_LED_SE;
+                break;
+            case 3:
+                bitmap |= MAP_LED_SW;
+                break;
+        }
+        
+    }
+    
+    
+    illuminate_compass_leds(bitmap);
+    Delay(15);
+}
+
+
+void push_value_onto_stack(uint16_t val,  uint16_t* sortedIndices)
+{
+    for (int i = (NUM_CHANNELS -1); i > 0; i--) {
+        //shuffle values to the next slot
+        sortedIndices[i] = sortedIndices[i-1];
+    }
+    sortedIndices[0] = val;
+}
+
+
+void getArrivalOrder(uint16_t* sortedIndices)
+{
+    uint32_t minValue = 0x0FFFFFFF;
+
+    for (int idx  = 0; idx < NUM_CHANNELS; idx++) {
+        uint32_t chanAvgPulse = __chanData[idx].averagePacketCenter;
+        if (chanAvgPulse > 0 && (chanAvgPulse < minValue)) {
+            minValue = chanAvgPulse;
+            push_value_onto_stack(idx,sortedIndices);
+        }
+    }
+}
+
 void watch_input_captures()
 {
 
@@ -567,61 +644,25 @@ void watch_input_captures()
 //        __measuredPulse = (uint32_t)(((uint64_t) minPulse * 1000000) / ((uint32_t)SystemCoreClock));
 
         if (__dataAvailable & TIM_IT_CC1) {
-            bitmap += MAP_LED_NE;
-        }
-        if (__dataAvailable & TIM_IT_CC2) {
-            bitmap += MAP_LED_N;
-        }
-        if (__dataAvailable & TIM_IT_CC3) {
             bitmap += MAP_LED_NW;
         }
-        if (__dataAvailable & TIM_IT_CC4) {
+        if (__dataAvailable & TIM_IT_CC2) {
+            bitmap += MAP_LED_NE;
+        }
+        if (__dataAvailable & TIM_IT_CC3) {
             bitmap += MAP_LED_SE;
+        }
+        if (__dataAvailable & TIM_IT_CC4) {
+            bitmap += MAP_LED_SW;
         }
         
         illuminate_compass_leds(bitmap);
         
+        //periodically display the directionality
         if (__renderCount == 5) {
-            uint16_t minIdx = 0;
-            uint32_t minValue = 0x0FFFFFFF;
-            uint32_t secondPlace = 0;
-            uint32_t winnerGap = 0;
-            for (int idx  = 0; idx < NUM_CHANNELS; idx++) {
-                uint32_t chanAvgPulse = __chanData[idx].averagePacketCenter;
-                if (chanAvgPulse > 0 && (chanAvgPulse < minValue)) {
-                    if (0 == secondPlace) {
-                        secondPlace = chanAvgPulse;
-                    }
-                    else {
-                        secondPlace = minValue;
-                    }
-                    minValue = chanAvgPulse;
-                    minIdx = idx;
-                }
-            }
-
-            //convert to microseconds
-            winnerGap = TIME_TO_USEC( (secondPlace - minValue) );
-            
-            if (winnerGap > 30) {
-                //display the "winner" of the closest receiver
-                switch (minIdx) {
-                    case 0:
-                        bitmap = MAP_LED_NE;
-                        break;
-                    case 1:
-                        bitmap = MAP_LED_N;
-                        break;
-                    case 2:
-                        bitmap = MAP_LED_NW;
-                        break;
-                    case 3:
-                        bitmap = MAP_LED_SE;
-                        break;
-                }
-                illuminate_compass_leds(bitmap);
-                Delay(15);
-            }
+            uint16_t orderOfArrivals[NUM_CHANNELS];
+            getArrivalOrder(orderOfArrivals);
+            renderDirectionForRaceResults(orderOfArrivals);
             
             resetCompCaptures();
             __renderCount = 0;
