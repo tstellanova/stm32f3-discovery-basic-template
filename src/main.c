@@ -10,7 +10,7 @@
 #define ALL_TIM_CHANNELS  ((uint16_t)(TIM_IT_CC1 + TIM_IT_CC2 + TIM_IT_CC3 + TIM_IT_CC4))
 
 #define NUM_CHANNELS    4
-#define PULSES_PER_PACKET    6
+#define PULSES_PER_PACKET    24
 #define CROSSINGS_PER_PACKET (2*PULSES_PER_PACKET)
 
 //microseconds to disallow further input on a particular channel
@@ -22,6 +22,8 @@
 #define TIME_BY_ADDING_USEC(x,t) ( (uint32_t) ((x) + (uint64_t)((t) * (uint32_t)SystemCoreClock ) / 1000000 ) )
 
 #define METERS_FROM_TICKS(x) ((float) (4.7*(x)/100000) )
+
+#define ALL_CHANNELS_HAVE_DATA  (TIM_IT_CC1 | TIM_IT_CC2 | TIM_IT_CC3 | TIM_IT_CC4)
 
 #define MAP_LED_NW      0x80
 #define MAP_LED_W       0x40
@@ -373,7 +375,7 @@ static void TIM_Config(void)
     TIM_TimeBaseStructInit(&tim_timebase);
     tim_timebase.TIM_Prescaler = 0;
     tim_timebase.TIM_CounterMode = TIM_CounterMode_Up;
-    tim_timebase.TIM_Period = 65535; //TODO check this...should probably be 32 bit instead
+    tim_timebase.TIM_Period = 0xFFFFFFFF; //TODO double-check this...Should be OK to reload with 32-bit value?
     tim_timebase.TIM_ClockDivision = TIM_CKD_DIV1;
     TIM_TimeBaseInit(TIM2, &tim_timebase);
     
@@ -559,6 +561,7 @@ void flash_leds(int gap)
 
 void renderDirectionForRaceResults(const uint16_t* sortedIndices)
 {
+    uint16_t delayTime = 5;
     uint16_t bitmap = 0;
     uint32_t firstIdx = sortedIndices[0];
     uint16_t secondIdx = sortedIndices[1];
@@ -568,6 +571,13 @@ void renderDirectionForRaceResults(const uint16_t* sortedIndices)
     
     //convert to microseconds
 //    uint32_t winnerGap = TIME_TO_USEC( (secondTime - firstTime) );
+    
+//    if (firstTime > 65536) {
+//        bitmap |= MAP_LED_N;
+//    }
+//    else {
+//        bitmap |= MAP_LED_S;
+//    }
     
     switch (firstIdx) {
         case 0:
@@ -584,28 +594,33 @@ void renderDirectionForRaceResults(const uint16_t* sortedIndices)
             break;
     }
     
-    if (winnerGap < 1800) { //essentially one wavelength diff
+    //1800 is about one wavelength diff @ 72MHz ?
+    //so if the difference is less than this threshold, that
+    //means we can barely tell which sensor is closer
+//    if (winnerGap < 112) {
+//        
+//        switch (secondIdx) {
+//            case 0:
+//                bitmap |= MAP_LED_NW;
+//                break;
+//            case 1:
+//                bitmap |= MAP_LED_NE;
+//                break;
+//            case 2:
+//                bitmap |= MAP_LED_SE;
+//                break;
+//            case 3:
+//                bitmap |= MAP_LED_SW;
+//                break;
+//        }
+//        
+////        delayTime = 10;
+//    }
 
-        switch (secondIdx) {
-            case 0:
-                bitmap |= MAP_LED_NW;
-                break;
-            case 1:
-                bitmap |= MAP_LED_NE;
-                break;
-            case 2:
-                bitmap |= MAP_LED_SE;
-                break;
-            case 3:
-                bitmap |= MAP_LED_SW;
-                break;
-        }
-        
-    }
     
     
     illuminate_compass_leds(bitmap);
-    Delay(15);
+    Delay(delayTime);
 }
 
 
@@ -638,6 +653,7 @@ void watch_input_captures()
     //wait for data available on all channels
     if (0 != __dataAvailable) {
         uint16_t bitmap = 0;
+        uint16_t activeDetectors = 0;
         __renderCount++;
 
         /* Compute the pulse width in us */
@@ -645,24 +661,31 @@ void watch_input_captures()
 
         if (__dataAvailable & TIM_IT_CC1) {
             bitmap += MAP_LED_NW;
+            activeDetectors++;
         }
         if (__dataAvailable & TIM_IT_CC2) {
             bitmap += MAP_LED_NE;
+            activeDetectors++;
         }
         if (__dataAvailable & TIM_IT_CC3) {
             bitmap += MAP_LED_SE;
+            activeDetectors++;
         }
         if (__dataAvailable & TIM_IT_CC4) {
             bitmap += MAP_LED_SW;
+            activeDetectors++;
         }
         
         illuminate_compass_leds(bitmap);
         
         //periodically display the directionality
-        if (__renderCount == 5) {
-            uint16_t orderOfArrivals[NUM_CHANNELS];
-            getArrivalOrder(orderOfArrivals);
-            renderDirectionForRaceResults(orderOfArrivals);
+        
+        if (__renderCount > 5) {
+            if (activeDetectors  > 1) {
+                uint16_t orderOfArrivals[NUM_CHANNELS];
+                getArrivalOrder(orderOfArrivals);
+                renderDirectionForRaceResults(orderOfArrivals);
+            }
             
             resetCompCaptures();
             __renderCount = 0;
@@ -697,10 +720,9 @@ void resetCompCaptures(void)
 void setup(void)
 {
 
-    
     /* SysTick end of count event each 10ms */
     RCC_GetClocksFreq(&RCC_Clocks);
-    SysTick_Config(RCC_Clocks.HCLK_Frequency / 200); // div 100 normally?
+    SysTick_Config(RCC_Clocks.HCLK_Frequency / 800); // div 100 normally?
     
     /* Initialize LEDs and User Button available on STM32F3-Discovery board */
     STM_EVAL_LEDInit(LED3);
